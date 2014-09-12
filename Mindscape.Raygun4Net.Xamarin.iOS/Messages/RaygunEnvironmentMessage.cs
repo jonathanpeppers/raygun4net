@@ -8,8 +8,8 @@ using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
 
-using MonoTouch.UIKit;
-using MonoTouch.Foundation;
+using UIKit;
+using Foundation;
 
 namespace Mindscape.Raygun4Net.Messages
 {
@@ -46,7 +46,7 @@ namespace Mindscape.Raygun4Net.Messages
     private const string ProcessiorCountPropertyName = "hw.ncpu";
     private const string ArchitecturePropertyName = "hw.machine";
 
-    [DllImport(global::MonoTouch.Constants.SystemLibrary)]
+	[DllImport(global::ObjCRuntime.Constants.SystemLibrary)]
     private static extern int sysctlbyname([MarshalAs(UnmanagedType.LPStr)] string property,
                                            IntPtr output,
                                            IntPtr oldLen,

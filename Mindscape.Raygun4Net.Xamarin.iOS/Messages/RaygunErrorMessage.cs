@@ -5,8 +5,8 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 
-using MonoTouch.Foundation;
-using MonoTouch.ObjCRuntime;
+using Foundation;
+using ObjCRuntime;
 
 namespace Mindscape.Raygun4Net.Messages
 {
@@ -48,9 +48,7 @@ namespace Mindscape.Raygun4Net.Messages
       MonoTouchException mex = exception as MonoTouchException;
       if (mex != null && mex.NSException != null)
       {
-        var ptr = Messaging.intptr_objc_msgSend(mex.NSException.Handle, Selector.GetHandle("callStackSymbols"));
-        var arr = NSArray.StringArrayFromHandle(ptr);
-        foreach (var line in arr)
+		foreach (var line in mex.NSException.CallStackSymbols)
         {
           lines.Add(new RaygunErrorStackTraceLineMessage { FileName = line });
         }
