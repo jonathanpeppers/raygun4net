@@ -23,6 +23,8 @@ namespace Mindscape.Raygun4Net
   {
     private readonly string _apiKey;
     private static List<Type> _wrapperExceptions;
+    private string _user;
+    private RaygunIdentifierMessage _userInfo;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RaygunClient" /> class.
@@ -65,12 +67,67 @@ namespace Mindscape.Raygun4Net
     /// <summary>
     /// Gets or sets the user identity string.
     /// </summary>
-    public string User { get; set; }
+    public string User
+    {
+      get { return _user; }
+      set
+      {
+        _user = value;
+        if (_reporter != null && _user != null)
+        {
+          _reporter.Identify(_user);
+        }
+      }
+    }
 
     /// <summary>
     /// Gets or sets information about the user including the identity string.
     /// </summary>
-    public RaygunIdentifierMessage UserInfo { get; set; }
+    public RaygunIdentifierMessage UserInfo
+    {
+      get { return _userInfo; }
+      set
+      {
+        _userInfo = value;
+        if (_reporter != null)
+        {
+          string user = _userInfo == null ? "" : UserInfoString (_userInfo);
+          if (user.Length != 0) {
+            _reporter.Identify(user);
+          }
+        }
+      }
+    }
+
+    private static string UserInfoString(RaygunIdentifierMessage userInfo)
+    {
+      string str = "";
+      if (!String.IsNullOrWhiteSpace (userInfo.FullName))
+      {
+        str += userInfo.FullName + " ";
+      }
+      else if (!String.IsNullOrWhiteSpace (userInfo.FirstName))
+      {
+        str += userInfo.FirstName + " ";
+      }
+      if (!String.IsNullOrWhiteSpace (userInfo.Identifier))
+      {
+        str += userInfo.Identifier + " ";
+      }
+      if (!String.IsNullOrWhiteSpace (userInfo.Email))
+      {
+        str += userInfo.Email + " ";
+      }
+      if (!String.IsNullOrWhiteSpace (userInfo.UUID))
+      {
+        str += userInfo.UUID + " ";
+      }
+      if (str.Length > 0)
+      {
+        str = str.Substring (0, str.Length - 1); // Removes last space
+      }
+      return str;
+    }
 
     /// <summary>
     /// Gets or sets a custom application version identifier for all error messages sent to the Raygun.io endpoint.
@@ -197,16 +254,35 @@ namespace Mindscape.Raygun4Net
       get { return _client; }
     }
 
+    [DllImport ("libc")]
+    private static extern int sigaction (Signal sig, IntPtr act, IntPtr oact);
+
+    enum Signal {
+      SIGBUS = 10,
+      SIGSEGV = 11
+    }
+
+    private const string StackTraceDirectory = "stacktraces";
+    private Mindscape.Raygun4Net.Xamarin.iOS.Native.Raygun _reporter;
+
     /// <summary>
     /// Causes Raygun to listen to and send all unhandled exceptions and unobserved task exceptions.
     /// </summary>
     /// <param name="apiKey">Your app api key.</param>
     public static void Attach(string apiKey)
     {
-      Detach();
-      _client = new RaygunClient(apiKey);
-      AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
-      TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
+      Attach(apiKey, null);
+    }
+
+    /// <summary>
+    /// Causes Raygun to listen to and send all unhandled exceptions and unobserved task exceptions.
+    /// </summary>
+    /// <param name="apiKey">Your app api key.</param>
+    /// <param name="canReportNativeErrors">Whether or not to listen to and report native exceptions.</param>
+    /// <param name="hijackNativeSignals">When true, this solves the issue where null reference exceptions inside try/catch blocks crash the app, but when false, additional native errors can be reported.</param>
+    public static void Attach(string apiKey, bool canReportNativeErrors, bool hijackNativeSignals)
+    {
+      Attach (apiKey, null, canReportNativeErrors, hijackNativeSignals);
     }
 
     /// <summary>
@@ -216,10 +292,53 @@ namespace Mindscape.Raygun4Net
     /// <param name="user">An identity string for tracking affected users.</param>
     public static void Attach(string apiKey, string user)
     {
+      Attach (apiKey, user, false, true);
+    }
+
+    /// <summary>
+    /// Causes Raygun to listen to and send all unhandled exceptions and unobserved task exceptions.
+    /// </summary>
+    /// <param name="apiKey">Your app api key.</param>
+    /// <param name="user">An identity string for tracking affected users.</param>
+    /// <param name="canReportNativeErrors">Whether or not to listen to and report native exceptions.</param>
+    /// <param name="hijackNativeSignals">When true, this solves the issue where null reference exceptions inside try/catch blocks crash the app, but when false, additional native errors can be reported.</param>
+    public static void Attach(string apiKey, string user, bool canReportNativeErrors, bool hijackNativeSignals)
+    {
       Detach();
-      _client = new RaygunClient(apiKey) { User = user };
+
+      PopulateCrashReportDirectoryStructure ();
+
+      _client = new RaygunClient(apiKey);
       AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
       TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
+
+      if (canReportNativeErrors)
+      {
+        if (hijackNativeSignals)
+        {
+          IntPtr sigbus = Marshal.AllocHGlobal (512);
+          IntPtr sigsegv = Marshal.AllocHGlobal (512);
+
+          // Store Mono SIGSEGV and SIGBUS handlers
+          sigaction (Signal.SIGBUS, IntPtr.Zero, sigbus);
+          sigaction (Signal.SIGSEGV, IntPtr.Zero, sigsegv);
+
+          _client._reporter = Mindscape.Raygun4Net.Xamarin.iOS.Native.Raygun.SharedReporterWithApiKey (apiKey);
+
+          // Restore Mono SIGSEGV and SIGBUS handlers
+          sigaction (Signal.SIGBUS, sigbus, IntPtr.Zero);
+          sigaction (Signal.SIGSEGV, sigsegv, IntPtr.Zero);
+
+          Marshal.FreeHGlobal (sigbus);
+          Marshal.FreeHGlobal (sigsegv);
+        }
+        else
+        {
+          _client._reporter = Mindscape.Raygun4Net.Xamarin.iOS.Native.Raygun.SharedReporterWithApiKey (apiKey);
+        }
+      }
+
+      _client.User = user; // Set this last so that it can passed to the native reporter.
     }
 
     /// <summary>
@@ -236,6 +355,10 @@ namespace Mindscape.Raygun4Net
       if (e.Exception != null)
       {
         _client.Send(e.Exception);
+        if (_client._reporter != null)
+        {
+          WriteExceptionInformation (_client._reporter.NextReportUUID, e.Exception);
+        }
       }
     }
 
@@ -244,10 +367,34 @@ namespace Mindscape.Raygun4Net
       if (e.ExceptionObject is Exception)
       {
         _client.Send(e.ExceptionObject as Exception);
+        if (_client._reporter != null)
+        {
+          WriteExceptionInformation (_client._reporter.NextReportUUID, e.ExceptionObject as Exception);
+        }
       }
     }
 
-    protected RaygunMessage BuildMessage(Exception exception, IList<string> tags, IDictionary userCustomData)
+    private static void PopulateCrashReportDirectoryStructure()
+    {
+      var documents = Environment.GetFolderPath (Environment.SpecialFolder.MyDocuments);
+      var path = Path.Combine (documents, "..", "Library", "Caches", StackTraceDirectory);
+      Directory.CreateDirectory (path);
+    }
+
+    private static void WriteExceptionInformation(string identifier, Exception exception)
+    {
+      if (exception == null) return;
+
+      var documents = Environment.GetFolderPath (Environment.SpecialFolder.MyDocuments);
+      var path = Path.GetFullPath(Path.Combine (documents, "..", "Library", "Caches", StackTraceDirectory, string.Format ("{0}", identifier)));
+
+      var exceptionType = exception.GetType();
+      string message = exceptionType.Name + ": " + exception.Message;
+
+      File.WriteAllText (path, string.Join(Environment.NewLine, exceptionType.FullName, message, exception.StackTrace));
+    }
+
+    internal RaygunMessage BuildMessage(Exception exception, IList<string> tags, IDictionary userCustomData)
     {
       exception = StripWrapperExceptions(exception);
 

@@ -1102,14 +1102,15 @@ namespace Mindscape.Raygun4Net
     static bool SerializeString(string aString, StringBuilder builder)
     {
       // Happy path if there's nothing to be escaped. IndexOfAny is highly optimized (and unmanaged)
-      if (aString.IndexOfAny(EscapeCharacters) == -1)
+      // Commented out to handle all control-characters.
+      /*if (aString.IndexOfAny(EscapeCharacters) == -1)
       {
         builder.Append('"');
         builder.Append(aString);
         builder.Append('"');
 
         return true;
-      }
+      }*/
 
       builder.Append('"');
       int safeCharacterCount = 0;
@@ -1124,13 +1125,22 @@ namespace Mindscape.Raygun4Net
         // with \0 [default(char)] denoting a safe character.
         if (c >= EscapeTable.Length || EscapeTable[c] == default(char))
         {
-          safeCharacterCount++;
-        }
-        else if (char.IsControl(c))
-        {
-          IntToHex(c, hexSeqBuffer);
-          builder.Append("\\u");
-          builder.Append(hexSeqBuffer);
+          if (char.IsControl(c))
+          {
+            if (safeCharacterCount > 0)
+            {
+              builder.Append(charArray, i - safeCharacterCount, safeCharacterCount);
+              safeCharacterCount = 0;
+            }
+
+            IntToHex(c, hexSeqBuffer);
+            builder.Append("\\u");
+            builder.Append(hexSeqBuffer);
+          }
+          else
+          {
+            safeCharacterCount++;
+          }
         }
         else
         {
@@ -1935,7 +1945,17 @@ namespace Mindscape.Raygun4Net
         ParameterExpression instance = Expression.Parameter(typeof(object), "instance");
         UnaryExpression instanceCast = (!IsValueType(propertyInfo.DeclaringType)) ? Expression.TypeAs(instance, propertyInfo.DeclaringType) : Expression.Convert(instance, propertyInfo.DeclaringType);
         Func<object, object> compiled = Expression.Lambda<Func<object, object>>(Expression.TypeAs(Expression.Call(instanceCast, getMethodInfo), typeof(object)), instance).Compile();
-        return delegate(object source) { return compiled(source); };
+        return delegate(object source)
+        {
+          try
+          {
+            return compiled(source);
+          }
+          catch (Exception e)
+          {
+            return e.GetType().FullName + ": " + e.Message;
+          }
+        };
       }
 
       public static GetDelegate GetGetMethodByExpression(FieldInfo fieldInfo)
